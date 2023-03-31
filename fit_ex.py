@@ -878,6 +878,149 @@ def forced_param_ridge_fit(forced_clusters, clusters, energies, counts, comps, f
                 str(cluster_pick[i][0]) + ':' + str(cluster_pick[i][1]) + ':' + str(cluster_pick[i][2][0]) + ':' + str(
                     cluster_coef[i + 1]) + '\n')
 
+def two_stage_fit(clusters, energies, counts, comps, fold_pick=10, Normalize=True, Intercept=True, Energy_above_hull = True, name=''):
+    ###- Lambda expression for scaling to energy above hull -###
+    scale = lambda x0, y0, x1, y1, x2, y2: abs((y2 - y1) * x0 - (x2 - x1) * y0 + x2 * y1 - y2 * x1) / np.sqrt(
+        (y2 - y1) ** 2 + (x2 - x1) ** 2)
+    ###- scale to energy above hull -###
+    if Energy_above_hull == True: # If you want to FIT to energy above hull (which you don't)
+        y1 = min(energies)
+        y2 = max(energies)
+        x2 = min(comps)
+        x1 = max(comps)
+        if x2==x1:
+            energies = [energies[i]-y1 for i in range(len(energies))]
+        else:
+            energies = [scale(comps[i], energies[i], x1, y1, x2, y2) for i in range(len(energies))]
+    counts_1 = []
+    counts_2 = []
+    clusters_1 = [clusters[i] for i in range(len(clusters)) if clusters[i][2][0] == 0]
+    clusters_2 = [clusters[i] for i in range(len(clusters)) if clusters[i][2][0] == 1]
+    for i in range(len(counts)):
+        count_1 = []
+        count_2 = []
+        for j in range(len(clusters)):
+            if clusters[j][2][0] == 0:
+                count_1.append(counts[i][j])
+            elif clusters[j][2][0] == 1:
+                count_2.append(counts[i][j])
+        counts_1.append(count_1)
+        counts_2.append(count_2)
+    ###- Set up text for output file -###
+    file_out = 'Fit_summery.txt'
+    file = open(file_out, 'w')
+    file.write('Data set: ' + name + '\n\n' + 'Clusters:  [[species],[distance],[chem (0) / spin (1)]]' + '\n')
+    [file.write(str(clusters[i]) + '\n') for i in range(len(clusters))]
+    file.write('\n\nEnergy per Atom (eV) : Cluster Count per Atom\n')
+    for i in range(len(energies)):
+        file.write(str(energies[i]) + ' : ' + str(counts[i]) + '\n')
+
+    ###- Set up alphas for CV -###
+    alpha_range = [-10, 10]
+    alpha_lasso = np.logspace(alpha_range[0], alpha_range[1], num=1000) # for lasso cv
+    #n_alphas = 1010
+    #alpha_ridge = np.logspace(-15, 10, n_alphas) # for ridge cv
+    alpha_ridge = alpha_lasso
+    ###- Set range for plot -###
+    axis_range = [min(energies) * 1.0001, max(energies) * .9999]
+    kf = KFold(n_splits=fold_pick, shuffle=True)
+    # LASSO and RIDGE, Cross-Validation, Lin Reg without CV
+    lassocv = LassoCV(alphas=alpha_lasso, normalize=Normalize, fit_intercept=Intercept, cv=kf, max_iter=1e9)
+    ridgecv = RidgeCV(alphas=alpha_ridge, normalize=Normalize, fit_intercept=Intercept, cv=None, store_cv_values=True)
+    linreg = LinearRegression(fit_intercept=Intercept, normalize=Normalize)
+    # Fit to data for each method
+    lassocv.fit(counts_1, energies) # do fit for lasso
+    ridgecv.fit(counts_1, energies) # do fit for ridge
+    linreg.fit(counts_1, energies) # do fit for linreg
+    lassocv_rmse = np.sqrt(lassocv.mse_path_)
+    ridgecv_rmse = np.sqrt(ridgecv.cv_values_)
+    # Set up Random Forrest regression, max depth is hard coded to 5 but this can be played with
+    #RandF_reg = RandomForestRegressor(max_depth=5, random_state=0)
+    #RandF_reg.fit(counts, energies) # for random forrest fit
+
+    ### Get results ready for energy above hull plots ###
+    y1 = min(energies)
+    y2 = max(energies)
+    x2 = min(comps)
+    x1 = max(comps)
+    scale = lambda x0, y0, x1, y1, x2, y2: abs((y2 - y1) * x0 - (x2 - x1) * y0 + x2 * y1 - y2 * x1) / np.sqrt(
+        (y2 - y1) ** 2 + (x2 - x1) ** 2)
+    eahDFT = [scale(comps[i], energies[i], x1, y1, x2, y2) for i in range(len(energies))]
+    axis_rangeEAH = [-0.002, max(eahDFT) * 1.1]
+
+
+    ########################################################################################################################
+    ################ LASSO FIT #############################################################################################
+    ########################################################################################################################
+    cluster_energy_ce = lassocv.predict(counts_1)
+    new_enrg_lasso = [energies[i]-cluster_energy_ce[i] for i in range(len(energies))]
+    coefs_1 = lassocv.coef_
+    int_1 = lassocv.intercept_
+    lassocv.fit(counts_2, new_enrg_lasso)
+    coefs_2 = lassocv.coef_
+    int_2 = lassocv.intercept_
+    counts_final = [counts_1[i] + counts_2[i] for i in range(len(energies))]
+    coefs_final = np.hstack((coefs_1,coefs_2))
+    int_final = int_1 + int_2
+    lassocv.intercept_ = int_final
+    lassocv.coef_ = coefs_final
+    energies_final = lassocv.predict(counts_final)
+    clusters_final = clusters_1 + clusters_2
+
+
+    print(len(clusters_final))
+    print(len(counts_final[0]))
+    print(counts_final[0])
+    print(energies_final[0])
+    rmse = np.sqrt(mean_squared_error(energies, energies_final))
+    file.write("\n\n#### LASSO #### \nk-folds cross validation\n")
+    file.write("rmse of fit:%7.6f\n" % rmse)
+    file.write("alpha: %7.6f\n" % lassocv.alpha_)
+    file.write("avg rmse: %7.4f\n" % min(lassocv_rmse.mean(axis=-1)))
+    file.write("score: %7.4f\n" % lassocv.score(counts_final, energies))
+    file.write("non-zero coefficient: %7.4f\n" % np.count_nonzero(lassocv.coef_))
+    file.write('Intercept: ')
+    file.write(str(lassocv.intercept_))
+    file.write('\n')
+
+    # Plot Fit vs DFT
+    plt.figure()
+    plt.scatter(energies, energies_final, color='b', alpha=0.5)
+    plt.plot(axis_range, axis_range, 'k', alpha=0.5)
+    plt.xlim(axis_range)
+    plt.ylim(axis_range)
+    plt.gca().set_aspect('equal')
+    plt.xlabel('Energy, DFT')
+    plt.ylabel('Energy, CE')
+    plt.title('LASSO Fit Comparison: ' + name)
+    plt.tight_layout()
+    plt.show()
+    eahCE = [scale(comps[i], energies_final[i], x1, y1, x2, y2) for i in range(len(energies_final))]
+    plt.scatter(eahDFT, eahCE, color='b', alpha=0.5)
+    plt.plot(axis_rangeEAH, axis_rangeEAH, 'k', alpha=0.5)
+    plt.xlim(axis_rangeEAH)
+    plt.ylim(axis_rangeEAH)
+    plt.gca().set_aspect('equal')
+    plt.xlabel('EAH, DFT')
+    plt.ylabel('EAH, CE')
+    plt.title('LASSO Fit Comparison: ' + name)
+    plt.tight_layout()
+    plt.show()
+
+    file.write("\n Clusters \n")
+    for i in range(len(clusters_final)):
+        if len(clusters_final[i]) == 2:
+            file.write(str(clusters_final[i][0]) + ':' + '[0]' + ':' + str(clusters_final[i][1][0]) + ':' + str(
+                coefs_final[i]) + '\n')
+        else:
+            file.write(
+                str(clusters_final[i][0]) + ':' + str(clusters_final[i][1]) + ':' + str(clusters_final[i][2][0]) + ':' + str(
+                    coefs_final[i]) + '\n')
+    file.write("\n")
+    file.write("\n")
+
+    return lassocv
+
 # Benchmarking and validation function.
 def pert_test(clusters, energies, counts, comps, noise=0.1, Normalize=True, Intercept=True, Energy_above_hull = True, name=''):
     fold_pick = 10

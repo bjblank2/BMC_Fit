@@ -33,8 +33,11 @@ if use_saved == True:
     names = []
     count.read_data(save_file, cluster_file, clusters, enrgies, counts, comps, names)
     first_fit = fit.three_way_fit(clusters, enrgies, counts, comps,fold_pick=fold, Normalize=normalize, Intercept=intercept, Energy_above_hull=energy_above, names=names)
+    ## When you want to force the value of certain coefs to be some known value and allow the others to be bit normaly:
     #forced_clusters = [[19, -0.002]]#,[20, 0.02],[21, -0.0015], [22, -0.0015]]
     #first_fit = fit.forced_param_fit(forced_clusters, clusters, enrgies, counts, comps, fold_pick=fold, Normalize=normalize, Intercept=intercept, Energy_above_hull=energy_above)
+    ## When your data set has highly correlated variable clesses (spin clusters and chemical clusters) fit to Chem first then fit to spin. Gives two stage for lasso, ridge, and least squairs
+    #first_fit = fit.two_stage_fit(forced_clusters, clusters, enrgies, counts, comps, fold_pick=fold, Normalize=normalize, Intercept=intercept, Energy_above_hull=energy_above)
 
 else:
     #count.count_clusters_SC(vasp_data, cluster_file, clusters, enrgies, counts, comps, vols,tol) # Fill predictor matrix, energies, and compositions (this takes the longest to run)
